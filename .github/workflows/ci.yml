@@ -1,0 +1,53 @@
+# Host checks. The ESP-IDF example needs the Xtensa toolchain (espup) and is built on its own,
+# as described in examples/esp-idf/README.md.
+name: CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**", "release/**", "hotfix/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host:
+    name: Format, clippy, tests and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # Builds the package that would go to crates.io and compiles the crate from it.
+      - run: cargo package
+
+  msrv:
+    name: Rust 1.81 (rust-version)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.81"
+      - run: cargo test
+
+  no-std:
+    name: Build without std
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      # A target without std fails to build if the crate depends on it.
+      - run: cargo build --target thumbv7em-none-eabihf
