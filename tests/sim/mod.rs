@@ -1,6 +1,10 @@
-//! A simulated DHT11 line: a pin, a delay and a platform that share one clock.
+//! A simulated DHT11 line: a data pin, a power pin, a delay and a platform that share one
+//! clock.
 //!
 //! Time advances only when the driver waits or reads the pin, so every test is deterministic.
+
+// Each test file uses part of the simulator.
+#![allow(dead_code)]
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -14,6 +18,12 @@ const READ_NS: u64 = 300;
 
 /// Shortest start pulse the simulated sensor answers.
 const START_PULSE_NS: u64 = 18_000_000;
+
+/// How long a stuck sensor must go without any power, DATA included, to recover.
+const RESET_NS: u64 = 500_000_000;
+
+/// Time the sensor needs after power-up before it answers.
+const POWER_UP_NS: u64 = 1_000_000_000;
 
 /// A stretch of the sensor's answer: whether the line is high, and for how many microseconds.
 pub type Stretch = (bool, u64);
@@ -72,8 +82,10 @@ pub struct Setup {
     pub first_tick: u32,
     /// Something holds the line low.
     pub stuck_low: bool,
-    /// `set_low` fails.
+    /// `set_low` fails on the data pin.
     pub broken_pin: bool,
+    /// The sensor does not answer until it goes without power.
+    pub stuck: bool,
 }
 
 impl Default for Setup {
@@ -84,6 +96,7 @@ impl Default for Setup {
             first_tick: 0,
             stuck_low: false,
             broken_pin: false,
+            stuck: false,
         }
     }
 }
@@ -100,6 +113,12 @@ struct State {
     exposed_reads: Cell<u32>,
     /// Longest stretch spent inside `uninterrupted`, in nanoseconds.
     longest_uninterrupted_ns: Cell<u64>,
+    stuck: Cell<bool>,
+    power_on: Cell<bool>,
+    /// When the power was last restored; `None` while it has been on since the start.
+    powered_at: Cell<Option<u64>>,
+    /// Since when the sensor has had no power at all: VCC off and DATA held low.
+    unpowered_since: Cell<Option<u64>>,
 }
 
 impl State {
@@ -119,6 +138,34 @@ impl State {
         }
         true
     }
+
+    /// Whether the sensor would answer a start pulse now.
+    fn ready(&self) -> bool {
+        let now = self.now_ns.get();
+        self.power_on.get()
+            && !self.stuck.get()
+            && self
+                .powered_at
+                .get()
+                .map_or(true, |at| now - at >= POWER_UP_NS)
+    }
+
+    /// Follows whether the sensor has any power after a change on DATA or VCC. With VCC off
+    /// but DATA released, the pull-up keeps it powered.
+    fn update_supply(&self) {
+        let now = self.now_ns.get();
+        let unpowered = !self.power_on.get() && self.host_low_since.get().is_some();
+        match (unpowered, self.unpowered_since.get()) {
+            (true, None) => self.unpowered_since.set(Some(now)),
+            (false, Some(since)) => {
+                if now - since >= RESET_NS {
+                    self.stuck.set(false);
+                }
+                self.unpowered_since.set(None);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -126,6 +173,7 @@ pub struct Sim(Rc<State>);
 
 impl Sim {
     pub fn new(setup: Setup) -> Self {
+        let stuck = setup.stuck;
         Self(Rc::new(State {
             setup,
             now_ns: Cell::new(0),
@@ -134,7 +182,23 @@ impl Sim {
             uninterrupted: Cell::new(false),
             exposed_reads: Cell::new(0),
             longest_uninterrupted_ns: Cell::new(0),
+            stuck: Cell::new(stuck),
+            power_on: Cell::new(true),
+            powered_at: Cell::new(None),
+            unpowered_since: Cell::new(None),
         }))
+    }
+
+    pub fn power(&self) -> SimPower {
+        SimPower(self.0.clone())
+    }
+
+    pub fn now_ns(&self) -> u64 {
+        self.0.now_ns.get()
+    }
+
+    pub fn powered(&self) -> bool {
+        self.0.power_on.get()
     }
 
     pub fn parts(&self) -> (SimPin, SimDelay, SimPlatform) {
@@ -177,16 +241,17 @@ impl OutputPin for SimPin {
         if self.0.host_low_since.get().is_none() {
             self.0.host_low_since.set(Some(self.0.now_ns.get()));
         }
+        self.0.update_supply();
         Ok(())
     }
 
     fn set_high(&mut self) -> Result<(), SimError> {
         let now = self.0.now_ns.get();
         if let Some(since) = self.0.host_low_since.take() {
-            if now - since >= START_PULSE_NS {
-                self.0.answer_from.set(Some(now));
-            }
+            let started = now - since >= START_PULSE_NS && self.0.ready();
+            self.0.answer_from.set(started.then_some(now));
         }
+        self.0.update_supply();
         Ok(())
     }
 }
@@ -238,5 +303,29 @@ impl Platform for SimPlatform {
             .longest_uninterrupted_ns
             .set(state.longest_uninterrupted_ns.get().max(spent));
         result
+    }
+}
+
+/// The pin that powers the sensor, high for on.
+pub struct SimPower(Rc<State>);
+
+impl ErrorType for SimPower {
+    type Error = SimError;
+}
+
+impl OutputPin for SimPower {
+    fn set_low(&mut self) -> Result<(), SimError> {
+        self.0.power_on.set(false);
+        self.0.update_supply();
+        Ok(())
+    }
+
+    fn set_high(&mut self) -> Result<(), SimError> {
+        if !self.0.power_on.get() {
+            self.0.powered_at.set(Some(self.0.now_ns.get()));
+        }
+        self.0.power_on.set(true);
+        self.0.update_supply();
+        Ok(())
     }
 }
