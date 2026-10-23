@@ -19,7 +19,8 @@ impl Reading {
     ///
     /// Bit 7 of the temperature byte is taken as the sign, as `dht-sensor` 0.3 does. The
     /// DHT11 is specified for 0–50 °C, so the bit only matters for parts that report below
-    /// zero.
+    /// zero. Parts may differ in where they put the sign, and this convention has not been
+    /// checked below zero; `bytes()` gives the raw data.
     #[must_use]
     pub fn temperature(&self) -> i8 {
         let magnitude = (self.bytes[2] & 0x7F) as i8;

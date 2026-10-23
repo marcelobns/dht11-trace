@@ -16,6 +16,9 @@ use embedded_hal::digital::{self, ErrorKind, ErrorType, InputPin, OutputPin};
 /// What reading the pin costs, in nanoseconds: the polling loops advance the clock.
 const READ_NS: u64 = 300;
 
+/// What reading the counter costs, in nanoseconds.
+const TICK_NS: u64 = 50;
+
 /// Shortest start pulse the simulated sensor answers.
 const START_PULSE_NS: u64 = 18_000_000;
 
@@ -78,6 +81,10 @@ pub struct Setup {
     /// The sensor's answer to a start pulse; after it, the pull-up holds the line high.
     pub answer: Vec<Stretch>,
     pub ticks_per_us: u32,
+    /// What the platform reports as ticks per microsecond, if not the real rate.
+    pub reported_ticks_per_us: Option<u32>,
+    /// The counter never moves.
+    pub frozen_counter: bool,
     /// Counter value at time zero, to test wrap-around.
     pub first_tick: u32,
     /// Something holds the line low.
@@ -93,6 +100,8 @@ impl Default for Setup {
         Self {
             answer: Vec::new(),
             ticks_per_us: 160,
+            reported_ticks_per_us: None,
+            frozen_counter: false,
             first_tick: 0,
             stuck_low: false,
             broken_pin: false,
@@ -119,6 +128,8 @@ struct State {
     powered_at: Cell<Option<u64>>,
     /// Since when the sensor has had no power at all: VCC off and DATA held low.
     unpowered_since: Cell<Option<u64>>,
+    /// Times the power pin went from on to off.
+    power_cuts: Cell<u32>,
 }
 
 impl State {
@@ -186,6 +197,7 @@ impl Sim {
             power_on: Cell::new(true),
             powered_at: Cell::new(None),
             unpowered_since: Cell::new(None),
+            power_cuts: Cell::new(0),
         }))
     }
 
@@ -199,6 +211,10 @@ impl Sim {
 
     pub fn powered(&self) -> bool {
         self.0.power_on.get()
+    }
+
+    pub fn power_cuts(&self) -> u32 {
+        self.0.power_cuts.get()
     }
 
     pub fn parts(&self) -> (SimPin, SimDelay, SimPlatform) {
@@ -284,12 +300,17 @@ pub struct SimPlatform(Rc<State>);
 impl Platform for SimPlatform {
     fn ticks(&self) -> u32 {
         let state = &self.0;
+        state.now_ns.set(state.now_ns.get() + TICK_NS);
+        if state.setup.frozen_counter {
+            return state.setup.first_tick;
+        }
         let elapsed = state.now_ns.get() * u64::from(state.setup.ticks_per_us) / 1000;
         state.setup.first_tick.wrapping_add(elapsed as u32)
     }
 
     fn ticks_per_us(&self) -> u32 {
-        self.0.setup.ticks_per_us
+        let setup = &self.0.setup;
+        setup.reported_ticks_per_us.unwrap_or(setup.ticks_per_us)
     }
 
     fn uninterrupted<R>(&self, read: impl FnOnce() -> R) -> R {
@@ -315,6 +336,9 @@ impl ErrorType for SimPower {
 
 impl OutputPin for SimPower {
     fn set_low(&mut self) -> Result<(), SimError> {
+        if self.0.power_on.get() {
+            self.0.power_cuts.set(self.0.power_cuts.get() + 1);
+        }
         self.0.power_on.set(false);
         self.0.update_supply();
         Ok(())

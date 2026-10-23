@@ -14,10 +14,11 @@ sensor or from a read that was interrupted halfway:
 | `AckBroken` | The answer started but did not follow the 80 µs low and 80 µs high of the datasheet |
 | `Truncated { bits }` | The frame stopped after `bits` of its 40 bits |
 | `Checksum { frame }` | The frame arrived complete, but the checksum does not match; the five bytes come with it |
+| `ZeroFrame` | All 40 bits read as 0, which a working sensor never sends: the pulses were measured too short, usually because of a wrong `ticks_per_us` |
 | `Pin(error)` | The pin returned an error |
 
 `Fault` implements `Display`, so a log line such as `DHT11: frame cut after 39 of 40 bits`
-takes one `format!`. The crate is `no_std`, does not allocate and has no `unsafe` code.
+takes one `format!`. It is `#[non_exhaustive]`: new stages may come in minor versions. The crate is `no_std`, does not allocate and has no `unsafe` code.
 
 ## Usage
 
@@ -56,16 +57,18 @@ A stuck DHT11 only answers again after losing power. With its VCC on a GPIO, the
 restart it: `Dht11::new(data, delay, platform)?.with_power(vcc)?`.
 
 ```rust
-use dht11_trace::{Dht11, Platform};
+use dht11_trace::{Dht11, Platform, PowerError};
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 
-fn read_and_recover<P, D, T, W>(dht11: &mut Dht11<P, D, T, W>) -> Result<(), P::Error>
+fn read_and_recover<P, D, T, W>(
+    dht11: &mut Dht11<P, D, T, W>,
+) -> Result<(), PowerError<P::Error, W::Error>>
 where
     P: InputPin + OutputPin,
     D: DelayNs,
     T: Platform,
-    W: OutputPin<Error = P::Error>,
+    W: OutputPin,
 {
     if let Err(fault) = dht11.read() {
         println!("DHT11: {fault}");
@@ -81,11 +84,12 @@ where
 - `power_cycle()` holds DATA low, cuts the power for 1 s, restores it and waits the 1 s
   power-up time, so it blocks for about 2 s. DATA stays low because the pull-up could
   otherwise keep the sensor powered through it.
-- `failures()` counts failed reads in a row since the last good read or restart.
+- `failures()` counts failed reads in a row since the last good read or restart. Pin errors
+  do not count: they come from the MCU, and restarting the sensor would not help them.
   `power_cycle_after(n)` restarts once it reaches `n`, so a sensor that keeps failing is
   restarted every `n` failures.
-- The power pin is high for on and must have the data pin's error type, as pins from the same
-  HAL usually do. The sensor draws at most about 2.5 mA, which a GPIO can supply.
+- The power pin is high for on and may be of any pin type; a failed restart tells which pin
+  failed through `PowerError`. The sensor draws at most about 2.5 mA, which a GPIO can supply.
 
 ## The platform
 
@@ -93,8 +97,10 @@ A read blocks for about 23 ms: an 18 ms start pulse, then a 4 ms frame whose bit
 the length of a pulse, 26–28 µs for a 0 and 70 µs for a 1. Telling them apart takes two
 things that `embedded-hal` 1.0 does not define, and the `Platform` trait asks for them:
 
-- `ticks()` and `ticks_per_us()`: a free-running counter that keeps counting with interrupts
-  masked, such as the CPU cycle counter. One tick per microsecond is enough.
+- `ticks()` and `ticks_per_us()`: a free-running counter that counts up, wraps from
+  `u32::MAX` to 0 and keeps counting with interrupts masked, such as the CPU cycle counter.
+  One tick per microsecond is enough. If the counter stops, the read fails after a bounded
+  number of polls instead of hanging.
 - `uninterrupted(read)`: runs the frame read without interruption. An interrupt or a task
   switch of a few tens of microseconds corrupts the frame.
 
@@ -139,16 +145,16 @@ impl Platform for Esp32 {
 | Edge timeout | 100 µs | The longest phase of the protocol lasts 80 µs |
 | 0 or 1 | High pulse longer than 48 µs is a 1 | 0 bits last 26–28 µs, 1 bits 70 µs |
 
-The acknowledgement is checked at a fixed instant, instead of waiting for the line to rise
-after release: with a weak pull-up, the line may not reach the high level before the sensor
+The acknowledgement is checked at a fixed instant, timed by the counter inside the
+uninterrupted section, instead of waiting for the line to rise after release: with a weak pull-up, the line may not reach the high level before the sensor
 pulls it low, and the frame would come out shifted by one bit.
 
 ## Testing
 
 `cargo test` runs the driver against a simulated line, with no hardware: valid frames, every
 fault, a weak pull-up, bits away from the datasheet lengths, a 1 MHz counter, a counter that
-wraps around during the frame, and a stuck sensor that only recovers after losing power with
-DATA held low.
+wraps around during the frame, a counter that is misreported or stops, and a stuck sensor that
+only recovers after losing power with DATA held low.
 
 ## Status
 
