@@ -30,6 +30,7 @@ const POWER_UP_MS: u32 = 1000;
 ///
 /// The caller keeps the sensor's timing rules: wait 1 s after power-up before the first read
 /// and at least 1 s between reads.
+#[derive(Debug)]
 pub struct Dht11<P, D, T, W = FixedSupply> {
     pin: P,
     delay: D,
@@ -51,6 +52,10 @@ where
 {
     /// Takes the data pin and releases the line: the sensor takes a low level as a read
     /// request.
+    ///
+    /// # Errors
+    ///
+    /// The pin's error, if releasing the line fails.
     pub fn new(mut pin: P, delay: D, platform: T) -> Result<Self, P::Error> {
         pin.set_high()?;
         Ok(Self {
@@ -66,6 +71,10 @@ where
     /// it. The 1 s power-up time starts here.
     ///
     /// A GPIO can supply the sensor, which draws at most about 2.5 mA.
+    ///
+    /// # Errors
+    ///
+    /// The pin's error, if turning the power on fails.
     pub fn with_power<W>(self, mut power: W) -> Result<Dht11<P, D, T, W>, P::Error>
     where
         W: OutputPin<Error = P::Error>,
@@ -90,8 +99,11 @@ where
     /// Reads one frame.
     ///
     /// Blocks for about 23 ms: the 18 ms start pulse, then about 4 ms inside
-    /// [`Platform::uninterrupted`]. On failure, the [`Fault`] tells which stage of the protocol
-    /// went wrong.
+    /// [`Platform::uninterrupted`].
+    ///
+    /// # Errors
+    ///
+    /// A [`Fault`] naming the stage of the protocol that went wrong.
     pub fn read(&mut self) -> Result<Reading, Fault<P::Error>> {
         let result = self.read_once();
         self.failures = match result {
@@ -102,6 +114,7 @@ where
     }
 
     /// Failed reads in a row since the last good read or power cycle.
+    #[must_use]
     pub fn failures(&self) -> u32 {
         self.failures
     }
@@ -150,7 +163,11 @@ where
     ///
     /// A stuck DHT11 only answers again after losing power. DATA is held low while the power is
     /// off; otherwise the pull-up could keep the sensor powered through it. The power is
-    /// restored even if a pin fails, and the first error is returned.
+    /// restored even if a pin fails.
+    ///
+    /// # Errors
+    ///
+    /// The first pin error, after the power has been restored.
     pub fn power_cycle(&mut self) -> Result<(), P::Error> {
         let off = self.pin.set_low().and(self.power.set_low());
         self.delay.delay_ms(POWER_OFF_MS);
@@ -165,6 +182,10 @@ where
     /// Call it between reads, outside any time-critical work: a restart blocks for about 2 s.
     /// The count starts over after a restart, so a sensor that keeps failing is restarted
     /// again every `limit` failures. A `limit` of 0 counts as 1.
+    ///
+    /// # Errors
+    ///
+    /// The first pin error of the restart, as in [`Dht11::power_cycle`].
     pub fn power_cycle_after(&mut self, limit: u32) -> Result<bool, P::Error> {
         if self.failures < limit.max(1) {
             return Ok(false);
