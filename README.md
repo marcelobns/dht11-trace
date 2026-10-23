@@ -47,7 +47,8 @@ where
 - **Timing rules:** wait 1 s after power-up before the first read, and at least 1 s between
   reads. The driver does not keep track of either.
 - **Reading:** `humidity()` and `temperature()` return the integral parts; `bytes()` returns
-  the four data bytes as received, decimal bytes included.
+  the four data bytes as received. Some parts send tenths of a degree in the temperature's
+  decimal byte, such as `[43, 0, 27, 6]` for 27.6 °C.
 
 ## The platform
 
@@ -110,6 +111,14 @@ pulls it low, and the frame would come out shifted by one bit.
 `cargo test` runs the driver against a simulated line, with no hardware: valid frames, every
 fault, a weak pull-up, bits away from the datasheet lengths, a 1 MHz counter and a counter
 that wraps around during the frame.
+
+## Status
+
+Checked on hardware with one setup: a classic ESP32 (revision 3.1, 160 MHz, ESP-IDF v5.5.5)
+and one DHT11 module on GPIO4, through [`examples/esp-idf`](examples/esp-idf), with Wi-Fi off:
+89 reads in 3 minutes, none failed. The same algorithm read the sensor with Wi-Fi traffic in
+SenseBridge. The timing constants still need checking on other boards and sensors; reports
+are welcome.
 
 ## Origin
 
