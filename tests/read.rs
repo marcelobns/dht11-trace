@@ -174,5 +174,5 @@ fn hands_back_its_parts() {
     let sim = Sim::new(Setup::default());
     let (pin, delay, platform) = sim.parts();
     let dht11 = Dht11::new(pin, delay, platform).unwrap();
-    let (_pin, _delay, _platform) = dht11.release();
+    let (_pin, _delay, _platform, _power) = dht11.release();
 }

@@ -10,7 +10,7 @@ sensor or from a read that was interrupted halfway:
 | `Fault` | What happened |
 | --- | --- |
 | `LineLow` | The line was already low before the start pulse: DATA shorted to ground or the sensor stuck |
-| `NoAck` | No answer to the start pulse: no power, DATA disconnected or the sensor stuck |
+| `NoAck` | No answer to the start pulse: no power, DATA disconnected or the sensor stuck ([restart](#restarting-a-stuck-sensor)) |
 | `AckBroken` | The answer started but did not follow the 80 µs low and 80 µs high of the datasheet |
 | `Truncated { bits }` | The frame stopped after `bits` of its 40 bits |
 | `Checksum { frame }` | The frame arrived complete, but the checksum does not match; the five bytes come with it |
@@ -49,6 +49,43 @@ where
 - **Reading:** `humidity()` and `temperature()` return the integral parts; `bytes()` returns
   the four data bytes as received. Some parts send tenths of a degree in the temperature's
   decimal byte, such as `[43, 0, 27, 6]` for 27.6 °C.
+
+## Restarting a stuck sensor
+
+A stuck DHT11 only answers again after losing power. With its VCC on a GPIO, the driver can
+restart it: `Dht11::new(data, delay, platform)?.with_power(vcc)?`.
+
+```rust
+use dht11_trace::{Dht11, Platform};
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::{InputPin, OutputPin};
+
+fn read_and_recover<P, D, T, W>(dht11: &mut Dht11<P, D, T, W>) -> Result<(), P::Error>
+where
+    P: InputPin + OutputPin,
+    D: DelayNs,
+    T: Platform,
+    W: OutputPin<Error = P::Error>,
+{
+    if let Err(fault) = dht11.read() {
+        println!("DHT11: {fault}");
+    }
+    // Between reads, outside any time-critical work: restart after 3 failures in a row.
+    if dht11.power_cycle_after(3)? {
+        println!("DHT11 restarted");
+    }
+    Ok(())
+}
+```
+
+- `power_cycle()` holds DATA low, cuts the power for 1 s, restores it and waits the 1 s
+  power-up time, so it blocks for about 2 s. DATA stays low because the pull-up could
+  otherwise keep the sensor powered through it.
+- `failures()` counts failed reads in a row since the last good read or restart.
+  `power_cycle_after(n)` restarts once it reaches `n`, so a sensor that keeps failing is
+  restarted every `n` failures.
+- The power pin is high for on and must have the data pin's error type, as pins from the same
+  HAL usually do. The sensor draws at most about 2.5 mA, which a GPIO can supply.
 
 ## The platform
 
@@ -109,16 +146,18 @@ pulls it low, and the frame would come out shifted by one bit.
 ## Testing
 
 `cargo test` runs the driver against a simulated line, with no hardware: valid frames, every
-fault, a weak pull-up, bits away from the datasheet lengths, a 1 MHz counter and a counter
-that wraps around during the frame.
+fault, a weak pull-up, bits away from the datasheet lengths, a 1 MHz counter, a counter that
+wraps around during the frame, and a stuck sensor that only recovers after losing power with
+DATA held low.
 
 ## Status
 
 Checked on hardware with one setup: a classic ESP32 (revision 3.1, 160 MHz, ESP-IDF v5.5.5)
 and one DHT11 module on GPIO4, through [`examples/esp-idf`](examples/esp-idf), with Wi-Fi off:
 89 reads in 3 minutes, none failed. The same algorithm read the sensor with Wi-Fi traffic in
-SenseBridge. The timing constants still need checking on other boards and sensors; reports
-are welcome.
+SenseBridge. The timing constants still need checking on other boards and sensors, and the
+restart of a stuck sensor has only run against the simulated line so far; reports are
+welcome.
 
 ## Origin
 

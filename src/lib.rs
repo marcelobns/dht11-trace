@@ -8,7 +8,7 @@ mod fault;
 mod platform;
 mod reading;
 
-pub use driver::Dht11;
+pub use driver::{Dht11, FixedSupply};
 pub use fault::Fault;
 pub use platform::Platform;
 pub use reading::Reading;
