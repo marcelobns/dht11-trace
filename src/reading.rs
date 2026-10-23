@@ -29,7 +29,8 @@ impl Reading {
     }
 
     /// The four data bytes as received: humidity, its decimal part, temperature and its
-    /// decimal part. Many parts send zero in the decimal bytes.
+    /// decimal part. Some parts send zero in the decimal bytes; others send tenths of a degree
+    /// in the temperature's, such as `[43, 0, 27, 6]` for 27.6 °C.
     pub fn bytes(&self) -> [u8; 4] {
         self.bytes
     }
