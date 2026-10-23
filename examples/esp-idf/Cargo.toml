@@ -1,0 +1,26 @@
+[package]
+name = "dht11-trace-esp-idf"
+version = "0.0.0"
+edition = "2021"
+# Example for the ESP32; built with its own toolchain, outside the crate.
+publish = false
+
+[[bin]]
+name = "dht11-trace-esp-idf"
+# The target has no test harness.
+harness = false
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+dht11-trace = { path = "../.." }
+esp-idf-svc = "0.53"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
