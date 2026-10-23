@@ -2,9 +2,9 @@
 
 Notable changes to `dht11-trace`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.0] - 2026-10-22
 
-First version, to be published as 0.1.0.
+First version.
 
 ### Added
 
@@ -13,3 +13,5 @@ First version, to be published as 0.1.0.
 - `Reading`, with the integral humidity and temperature and the four data bytes as received.
 - Restart of a stuck sensor powered from a pin: `Dht11::with_power`, `power_cycle` and `power_cycle_after`, which hold DATA low while the power is off; `failures` counts failed reads in a row.
 - Host tests against a simulated line.
+
+[0.1.0]: https://github.com/marcelobns/dht11-trace/releases/tag/v0.1.0
