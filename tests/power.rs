@@ -1,6 +1,6 @@
 mod sim;
 
-use dht11_trace::{Dht11, Fault};
+use dht11_trace::{Dht11, Fault, PowerError};
 use sim::{answer, frame, Setup, Sim, SimDelay, SimError, SimPin, SimPlatform, SimPower};
 
 type PoweredDht11 = Dht11<SimPin, SimDelay, SimPlatform, SimPower>;
@@ -64,11 +64,22 @@ fn power_cycles_after_the_given_number_of_failures() {
 }
 
 #[test]
-fn restores_the_power_even_when_a_pin_fails() {
+fn cuts_and_restores_the_power_even_when_the_data_pin_fails() {
     let (mut dht11, sim) = powered(Setup {
         broken_pin: true,
         ..Setup::default()
     });
-    assert_eq!(dht11.power_cycle(), Err(SimError));
+    assert_eq!(dht11.power_cycle(), Err(PowerError::Data(SimError)));
+    assert_eq!(sim.power_cuts(), 1);
     assert!(sim.powered());
+}
+
+#[test]
+fn pin_errors_do_not_count_as_sensor_failures() {
+    let (mut dht11, _sim) = powered(Setup {
+        broken_pin: true,
+        ..Setup::default()
+    });
+    assert_eq!(dht11.read(), Err(Fault::Pin(SimError)));
+    assert_eq!(dht11.failures(), 0);
 }

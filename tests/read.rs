@@ -153,6 +153,26 @@ fn reports_pin_errors() {
 }
 
 #[test]
+fn rejects_an_all_zero_frame_from_an_overstated_counter() {
+    // Every pulse measures half its length, so every bit reads as 0, and the zero checksum
+    // matches. (Three times too fast, the acknowledgement check already falls after it.)
+    let setup = Setup {
+        reported_ticks_per_us: Some(320),
+        ..answering(answer(frame(50, 27)))
+    };
+    assert_eq!(read(setup).0, Err(Fault::ZeroFrame));
+}
+
+#[test]
+fn gives_up_when_the_counter_stops() {
+    let setup = Setup {
+        frozen_counter: true,
+        ..answering(answer(frame(50, 27)))
+    };
+    assert!(read(setup).0.is_err());
+}
+
+#[test]
 fn describes_each_fault() {
     let text = |fault: Fault<SimError>| fault.to_string();
     assert_eq!(
@@ -166,6 +186,7 @@ fn describes_each_fault() {
         "checksum mismatch in frame [32, 00, 1b, 00, 4e]"
     );
     assert_eq!(text(Fault::Pin(SimError)), "pin error: SimError");
+    assert!(text(Fault::ZeroFrame).starts_with("all 40 bits read as 0"));
     assert!(text(Fault::NoAck).starts_with("no answer to the start pulse"));
 }
 

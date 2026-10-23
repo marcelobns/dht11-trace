@@ -1,7 +1,7 @@
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 
-use crate::{Fault, Platform, Reading};
+use crate::{Fault, Platform, PowerError, Reading};
 
 /// Start pulse: the datasheet asks for the line held low for at least 18 ms.
 const START_PULSE_MS: u32 = 18;
@@ -15,6 +15,11 @@ const EDGE_TIMEOUT_US: u32 = 100;
 
 /// High pulses longer than this are 1 bits (70 µs); shorter ones are 0 bits (26–28 µs).
 const ONE_THRESHOLD_US: u32 = 48;
+
+/// Most polls of one wait, so that a counter that stops while interrupts are masked ends the
+/// read with a fault instead of hanging the device. A fast MCU polls a 100 µs edge timeout a
+/// few thousand times.
+const MAX_POLLS: u32 = 100_000;
 
 /// Time without power in a power cycle.
 const POWER_OFF_MS: u32 = 1000;
@@ -74,10 +79,10 @@ where
     ///
     /// # Errors
     ///
-    /// The pin's error, if turning the power on fails.
-    pub fn with_power<W>(self, mut power: W) -> Result<Dht11<P, D, T, W>, P::Error>
+    /// The power pin's error, if turning the power on fails.
+    pub fn with_power<W>(self, mut power: W) -> Result<Dht11<P, D, T, W>, W::Error>
     where
-        W: OutputPin<Error = P::Error>,
+        W: OutputPin,
     {
         power.set_high()?;
         Ok(Dht11 {
@@ -108,12 +113,15 @@ where
         let result = self.read_once();
         self.failures = match result {
             Ok(_) => 0,
+            // A pin error is on the MCU's side: restarting the sensor would not help.
+            Err(Fault::Pin(_)) => self.failures,
             Err(_) => self.failures.saturating_add(1),
         };
         result
     }
 
-    /// Failed reads in a row since the last good read or power cycle.
+    /// Failed reads in a row since the last good read or power cycle. Pin errors
+    /// ([`Fault::Pin`]) do not count: they come from the MCU, not from the sensor.
     #[must_use]
     pub fn failures(&self) -> u32 {
         self.failures
@@ -133,15 +141,16 @@ where
         // every interrupt for 18 ms for no benefit.
         self.delay.delay_ms(START_PULSE_MS);
 
-        let Self {
-            pin,
-            delay,
-            platform,
-            ..
-        } = self;
+        let Self { pin, platform, .. } = self;
         let platform = &*platform;
-        let frame = platform.uninterrupted(|| read_frame(pin, delay, platform))?;
+        let frame = platform.uninterrupted(|| read_frame(pin, platform))?;
 
+        // An all-zero frame passes the checksum, but a working DHT11 never sends one: its
+        // humidity starts at 20 %. It comes from pulses measured too short, usually an
+        // overstated `ticks_per_us`.
+        if frame == [0; 5] {
+            return Err(Fault::ZeroFrame);
+        }
         let [data @ .., checksum] = frame;
         if data.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) == checksum {
             Ok(Reading::new(data))
@@ -156,7 +165,7 @@ where
     P: InputPin + OutputPin,
     D: DelayNs,
     T: Platform,
-    W: OutputPin<Error = P::Error>,
+    W: OutputPin,
 {
     /// Restarts the sensor: cuts its power for 1 s, restores it and waits the 1 s power-up
     /// time. Blocks for about 2 s.
@@ -168,13 +177,15 @@ where
     /// # Errors
     ///
     /// The first pin error, after the power has been restored.
-    pub fn power_cycle(&mut self) -> Result<(), P::Error> {
-        let off = self.pin.set_low().and(self.power.set_low());
+    pub fn power_cycle(&mut self) -> Result<(), PowerError<P::Error, W::Error>> {
+        let data_low = self.pin.set_low().map_err(PowerError::Data);
+        let power_off = self.power.set_low().map_err(PowerError::Power);
         self.delay.delay_ms(POWER_OFF_MS);
-        let on = self.power.set_high().and(self.pin.set_high());
+        let power_on = self.power.set_high().map_err(PowerError::Power);
+        let data_released = self.pin.set_high().map_err(PowerError::Data);
         self.delay.delay_ms(POWER_UP_MS);
         self.failures = 0;
-        off.and(on)
+        data_low.and(power_off).and(power_on).and(data_released)
     }
 
     /// Restarts the sensor once `limit` reads in a row have failed, and tells whether it did.
@@ -186,7 +197,10 @@ where
     /// # Errors
     ///
     /// The first pin error of the restart, as in [`Dht11::power_cycle`].
-    pub fn power_cycle_after(&mut self, limit: u32) -> Result<bool, P::Error> {
+    pub fn power_cycle_after(
+        &mut self,
+        limit: u32,
+    ) -> Result<bool, PowerError<P::Error, W::Error>> {
         if self.failures < limit.max(1) {
             return Ok(false);
         }
@@ -197,21 +211,21 @@ where
 
 /// Releases the line and reads the 40-bit frame: humidity, its decimal part, temperature, its
 /// decimal part and the checksum.
-fn read_frame<P, D, T>(pin: &mut P, delay: &mut D, platform: &T) -> Result<[u8; 5], Fault<P::Error>>
+fn read_frame<P, T>(pin: &mut P, platform: &T) -> Result<[u8; 5], Fault<P::Error>>
 where
     P: InputPin + OutputPin,
-    D: DelayNs,
     T: Platform,
 {
     pin.set_high().map_err(Fault::Pin)?;
+    let mut line = Line::new(pin, platform);
     // The line is sampled in the middle of the acknowledgement instead of waiting for it to
     // rise after release: with a weak pull-up it may not reach the high level before the
-    // sensor pulls it low, and the frame would come out shifted by one bit.
-    delay.delay_us(ACK_SAMPLE_US);
-    if pin.is_high().map_err(Fault::Pin)? {
+    // sensor pulls it low, and the frame would come out shifted by one bit. The wait runs on
+    // the counter, since a `DelayNs` may overshoot or depend on interrupts.
+    line.spin(ACK_SAMPLE_US);
+    if line.pin.is_high().map_err(Fault::Pin)? {
         return Err(Fault::NoAck);
     }
-    let mut line = Line::new(pin, platform);
     line.wait_for(Level::High, Fault::AckBroken)?;
     line.wait_for(Level::Low, Fault::AckBroken)?;
 
@@ -248,21 +262,33 @@ impl<'a, P: InputPin, T: Platform> Line<'a, P, T> {
         }
     }
 
+    /// Waits `us` microseconds on the counter, or [`MAX_POLLS`] polls if it stops.
+    fn spin(&self, us: u32) {
+        let start = self.platform.ticks();
+        let limit = us * self.ticks_per_us;
+        for _ in 0..MAX_POLLS {
+            if self.platform.ticks().wrapping_sub(start) >= limit {
+                return;
+            }
+        }
+    }
+
     /// Waits for the line to reach `level` and returns the counter at that moment, or
-    /// `timeout` after [`EDGE_TIMEOUT_US`].
+    /// `timeout` after [`EDGE_TIMEOUT_US`] or [`MAX_POLLS`] polls.
     fn wait_for(&mut self, level: Level, timeout: Fault<P::Error>) -> Result<u32, Fault<P::Error>> {
         let start = self.platform.ticks();
         let limit = EDGE_TIMEOUT_US * self.ticks_per_us;
-        loop {
+        for _ in 0..MAX_POLLS {
             let now = self.platform.ticks();
             let high = self.pin.is_high().map_err(Fault::Pin)?;
             if high == (level == Level::High) {
                 return Ok(now);
             }
             if now.wrapping_sub(start) > limit {
-                return Err(timeout);
+                break;
             }
         }
+        Err(timeout)
     }
 
     /// Microseconds between two counter values, even if the counter wrapped in between.
