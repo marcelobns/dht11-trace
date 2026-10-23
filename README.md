@@ -128,7 +128,7 @@ impl Platform for Esp32 {
 }
 ```
 
-[`examples/esp-idf`](examples/esp-idf) is a complete program for the ESP32.
+[`examples/esp-idf`](https://github.com/marcelobns/dht11-trace/blob/main/examples/esp-idf) is a complete program for the ESP32.
 
 ## Timing
 
@@ -153,7 +153,7 @@ DATA held low.
 ## Status
 
 Checked on hardware with one setup: a classic ESP32 (revision 3.1, 160 MHz, ESP-IDF v5.5.5)
-and one DHT11 module on GPIO4, through [`examples/esp-idf`](examples/esp-idf), with Wi-Fi off:
+and one DHT11 module on GPIO4, through [`examples/esp-idf`](https://github.com/marcelobns/dht11-trace/blob/main/examples/esp-idf), with Wi-Fi off:
 89 reads in 3 minutes, none failed. The same algorithm read the sensor with Wi-Fi traffic in
 SenseBridge. The timing constants still need checking on other boards and sensors, and the
 restart of a stuck sensor has only run against the simulated line so far; reports are
@@ -167,8 +167,8 @@ ESP32 next to Wi-Fi traffic.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](https://github.com/marcelobns/dht11-trace/blob/main/LICENSE-APACHE) or
+[MIT license](https://github.com/marcelobns/dht11-trace/blob/main/LICENSE-MIT) at your option.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion
 in this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above,

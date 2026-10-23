@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["dht11", "embedded-hal", "sensor", "humidity", "temperature"]
 categories = ["embedded", "hardware-support", "no-std"]
 # Repository conventions, not part of the crate.
-exclude = ["AGENTS.md"]
+exclude = ["AGENTS.md", "RELEASING.md"]
 
 [dependencies]
 embedded-hal = "1.0"
