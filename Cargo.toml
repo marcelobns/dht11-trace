@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.81"
 description = "DHT11 driver for embedded-hal 1.0 that reports the protocol stage where a read failed"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/marcelobns/dht11-trace"
 readme = "README.md"
 keywords = ["dht11", "embedded-hal", "sensor", "humidity", "temperature"]
 categories = ["embedded", "hardware-support", "no-std"]
